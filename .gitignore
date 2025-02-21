@@ -1,1 +1,5 @@
 data/*
+experiments/*
+*.ipynb
+*save.py
+finetuning_esm.py
