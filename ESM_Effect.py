@@ -264,7 +264,7 @@ class ESMEffectFull(nn.Module):
                 cached_embeddings_wt.append(self.embedding_cache[tuple(seq_id)])
             else:
                 with torch.no_grad():
-                    x = self.esm2mut(tokens_wt[i].unsqueeze(0), repr_layers=list(range(0,11)))
+                    x = self.esm2wt(tokens_wt[i].unsqueeze(0), repr_layers=list(range(0,11)))
                 embedding = x['representations'][10]  # Take the output of the 10th layer
                 self.embedding_cache[tuple(seq_id)] = embedding.detach()  # Detach from computation graph
                 cached_embeddings_wt.append(embedding)
@@ -297,10 +297,7 @@ class ESMEffectFull(nn.Module):
 
         position = self.const1 * wt[torch.arange(batch_size), pos, :] + self.const2 * mut[torch.arange(batch_size), pos, :]
         mean = self.const3 * wt[:, 1:].mean(dim=1) + self.const4 * mut[:, 1:].mean(dim=1)
-        
-        # position = self.const1 * wt[torch.arange(batch_size), pos, :] + self.const2 * mut[torch.arange(batch_size), pos, :]
-        # mean = self.const1 * wt[:, 1:].mean(dim=1) + self.const2 * mut[:, 1:].mean(dim=1)
-        
+
         x = torch.cat((position, mean), dim=1)
         x = self.dropout(self.relu(self.classifierbig(self.dropout(x))))
         predictions = self.classifier(x)
@@ -711,9 +708,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_s
 config = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'batch_size': 4,
-    'epochs': 5,
+    'epochs': 8,
     'criterion': 'MSELoss',
-    'lr_esm': 5e-5,
+    'lr_esm': 2e-5,
     'lr_head': 1e-4,
     'num_workers': 2,
     'feature_columns': ['classification']  # Add or remove features as needed (experimental feature, column must be present in dataset)
