@@ -11,7 +11,7 @@ data = data[~data['AA_Change'].str.startswith('*', na=False)]
 data = data[~data['AA_Change'].str.endswith('*', na=False)]
 
 data['label'] = data['Fitness_Score'] / 10
-data['classification'] = data['Classification'].apply(lambda x: 1 if x == 'Functional' else 0)
+data['classification'] = data['Classification'].apply(lambda x: 1 if x == 'Functional' else 0 if x == 'Intermediate' else -1)
 data = data[['AA_Change', 'classification', 'label']]
 
 print(f'Remaining data count: {len(data)}')

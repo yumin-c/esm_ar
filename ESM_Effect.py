@@ -474,7 +474,7 @@ class ExperimentManager:
         bme = bin_stats['mean_error'].mean()
 
         # Calculate auROC for classification
-        auroc = roc_auc_score(all_classifications, all_preds)
+        auroc = roc_auc_score(all_classifications[all_classifications != 0], all_preds[all_classifications != 0])
 
         metrics = {
             f"{prefix}_loss": total_loss / len(data_loader),
@@ -485,45 +485,6 @@ class ExperimentManager:
         }
 
         return metrics
-
-    # def evaluate(self, data_loader: DataLoader, prefix: str = "val") -> Dict[str, float]:
-    #     """Evaluate model on given dataset."""
-    #     self.model.eval()
-    #     total_loss = 0
-    #     all_preds = []
-    #     all_labels = []
-
-    #     with torch.no_grad():
-    #         for batch in data_loader:
-    #             loss = self._process_batch(batch, training=False)
-    #             total_loss += loss
-
-    #             # Store predictions and labels for correlation metrics
-    #             all_preds.extend(self.predictions.cpu().numpy())
-    #             all_labels.extend(self.labels.cpu().numpy())
-
-    #     # Calculate metrics
-    #     all_preds = np.squeeze(all_preds)
-    #     all_labels = np.squeeze(all_labels)
-
-    #     df = pd.DataFrame({'label': all_labels, 'prediction': all_preds})
-    #     df['error'] = abs(df["label"] - df["prediction"])
-    #     df['bin'] = pd.cut(df["label"], bins=100, labels=False, include_lowest=True)
-    #     bin_stats = df.groupby('bin').agg(
-    #         mean_error=('error', 'mean'),
-    #         n_datapoints=('error', 'size')
-    #     ).reset_index()
-    #     bme = bin_stats['mean_error'].mean()
-
-
-    #     metrics = {
-    #         f"{prefix}_loss": total_loss / len(data_loader),
-    #         f"{prefix}_pearson": pearsonr(all_labels, all_preds)[0],
-    #         f"{prefix}_spearman": spearmanr(all_labels, all_preds)[0],
-    #         f"{prefix}_bme": bme
-    #     }
-
-    #     return metrics
 
     def _process_batch(self, batch: Tuple, training: bool = True) -> float:
         """Process a single batch."""
@@ -638,6 +599,7 @@ class ExperimentManager:
                 print(f"Small Train Pearson: {train_subset_metrics['small_train_pearson']:.4f}")
                 print(f"Small Train Spearman: {train_subset_metrics['small_train_spearman']:.4f}")
                 print(f"Small Train BME: {train_subset_metrics['small_train_bme']:.4f}")
+                print(f"Small Train ROC: {train_subset_metrics['small_train_auroc']:.4f}")
 
 
             # Log epoch metrics
@@ -649,6 +611,7 @@ class ExperimentManager:
                 print(f"Val Pearson: {metrics['val_pearson']:.4f}")
                 print(f"Val Spearman: {metrics['val_spearman']:.4f}")
                 print(f"Val BME: {metrics['val_bme']:.4f}")
+                print(f"Val ROC: {metrics['val_auroc']:.4f}")
             print(f"Time: {epoch_time:.2f}s")
 
 
@@ -669,14 +632,14 @@ class ExperimentManager:
         with torch.no_grad():
             for batch in data_loader:
                 batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b for b in batch]
-                preds = self.model(*batch[:-1])  # Exclude labels
+                preds = self.model(*batch[:-2])  # Exclude labels
                 all_preds.extend(preds.cpu().numpy())
 
         # Add predictions to the original dataframe
         dataframe['prediction'] = np.squeeze(all_preds)
         return dataframe
 
-def plot_correlation(df, x_col, y_col, title, figsize=(8, 6)):
+def plot_correlation(df, x_col, y_col, title, figsize=(8, 8)):
     """
     Creates a scatter plot with a diagonal reference line and saves the plot.
 
@@ -702,7 +665,7 @@ def plot_correlation(df, x_col, y_col, title, figsize=(8, 6)):
     pearson_corr, _ = pearsonr(df[x_col], df[y_col])
 
     # Create scatter plot
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize, dpi=200)
     ax.scatter(df[x_col], df[y_col], alpha=0.5)
 
     # Add diagonal reference line
@@ -714,15 +677,15 @@ def plot_correlation(df, x_col, y_col, title, figsize=(8, 6)):
     ax.set_aspect('equal')
 
     # Add correlation text
-    corr_text = f"Spearman: {spearman_corr:.2f}\nPearson: {pearson_corr:.2f}\nBME: {bme:.2f}"
-    ax.text(0.1, 0.8, corr_text, transform=ax.transAxes,
-            bbox=dict(facecolor='white', alpha=0.8), fontsize=9)
+    corr_text = f"R = {spearman_corr:.2f}\nr = {pearson_corr:.2f}"
+    ax.text(0.1, 0.8, corr_text, transform=ax.transAxes, fontsize=12)
 
     # Labels and title
-    ax.set_xlabel(x_col)
-    ax.set_ylabel(y_col)
+    ax.set_xlabel('Score/10')
+    ax.set_ylabel('Prediction')
     ax.set_title(f"{title} ({len(df)} test mutations)")
-
+    
+    plt.tight_layout()
     plt.savefig('ESM_experiment_test.jpg')
     plt.show()
     plt.close(fig)
@@ -748,9 +711,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_s
 config = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'batch_size': 4,
-    'epochs': 10,
+    'epochs': 5,
     'criterion': 'MSELoss',
-    'lr_esm': 2e-5,
+    'lr_esm': 5e-5,
     'lr_head': 1e-4,
     'num_workers': 2,
     'feature_columns': ['classification']  # Add or remove features as needed (experimental feature, column must be present in dataset)
@@ -775,7 +738,7 @@ test.loc[:, "classification"] = test["classification"]
 train_dataset = ProteinDatasetESMEffect(train, config['feature_columns'])
 val_dataset = ProteinDatasetESMEffect(test, config['feature_columns'])
 
-small_train = train.sample(frac=0.1, random_state=42)  # 10% of the training data
+small_train = train.sample(frac=0.1, random_state=random_seed)  # 10% of the training data
 small_train_dataset = ProteinDatasetESMEffect(small_train, config['feature_columns'])
 
 small_train_loader = DataLoader(
@@ -802,11 +765,6 @@ val_loader = DataLoader(
     collate_fn=collate_fn_esmeffect
 )
 
-# Inspect Training Loss and Metrics for the train set and the validation set
-
-# %load_ext tensorboard
-# %tensorboard --logdir ./experiments
-
 # Train model
 experiment.train(train_loader, val_loader)
 
@@ -820,68 +778,3 @@ fig = plot_correlation(
     'prediction',
     "Optimized ESM-Effect on AR Dependency Test set\n(20%, non-overlapping positions)"
 )
-
-
-# Full ESM-Effect Model
-
-# import torch
-# import torch.nn as nn
-# import torch.nn.functional as F
-# import esm
-# from torch.optim import AdamW
-# from torch.optim.lr_scheduler import OneCycleLR
-# from torch.utils.data import Subset, DataLoader
-
-# class ESMEffect(nn.Module):
-#     def __init__(self, dropout_rate=0.2):
-#         super().__init__()
-
-#         freeze_up_to = 10
-
-#         self.esm2mut, _ = esm.pretrained.esm2_t30_150M_UR50D()
-#         for i in range(freeze_up_to):
-#             for param in self.esm2mut.layers[i].parameters():
-#                 param.requires_grad = False
-
-#         self.esm2wt, _ = esm.pretrained.esm2_t12_35M_UR50D()
-#         for i in range(freeze_up_to):
-#             for param in self.esm2wt.layers[i].parameters():
-#                 param.requires_grad = False
-
-
-#         embedding_dim = 640
-#         self.n_layers = 12
-
-#         # Regression head
-#         self.const1 = torch.nn.Parameter(torch.ones((1,embedding_dim)))
-#         self.const2 = torch.nn.Parameter(-1 * torch.ones((1,embedding_dim)))
-#         self.const3 = torch.nn.Parameter(torch.ones((1,embedding_dim)))
-#         self.const4 = torch.nn.Parameter(-1 * torch.ones((1,embedding_dim)))
-
-#         self.dropout = nn.Dropout(dropout_rate)
-#         self.classifierbig = nn.Linear(2*embedding_dim, embedding_dim)
-#         self.relu = nn.ReLU()
-#         self.classifier = nn.Linear(embedding_dim, 1)
-
-#     def forward(self, tokens_wt, tokens_mut, pos, lengths):
-
-#         batch_size = tokens_wt.shape[0]
-
-#         mut = self.esm2mut(tokens_mut, repr_layers=[self.n_layers])['representations'][self.n_layers]
-#         wt = self.esm2wt(tokens_wt, repr_layers=[self.n_layers])['representations'][self.n_layers]
-
-#         x = []
-#         for i in range(batch_size):
-
-#             position = self.const1 * wt[i, pos[i], :] + self.const2 * mut[i, pos[i], :]
-#             mean = self.const3 * wt[i, 1:lengths[i]+1].mean(dim=0) + self.const4 * mut[i, 1:lengths[i]+1].mean(dim=0)
-
-#             x.append(torch.concat((position, mean), dim=1))
-
-#         x = torch.stack(x).squeeze(1)
-#         x = self.dropout(self.relu(self.classifierbig(self.dropout(x))))
-#         predictions = self.classifier(x)
-
-#         return predictions
-
-
