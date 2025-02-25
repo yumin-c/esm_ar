@@ -1,5 +1,6 @@
 data/*
 experiments/*
+wandb/*
 *.ipynb
 *save.py
 finetuning_esm.py
