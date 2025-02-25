@@ -689,15 +689,16 @@ def plot_correlation(df, x_col, y_col, title, figsize=(8, 8)):
 
 # Load the DataFrame
 ar = pd.read_csv("data/filtered_dependency.csv")
+ar = ar.loc[ar['Fold']=='Train']
 
 # Position based split
 train_pos = np.random.choice(
-    ar["pos"].unique(), size=int(len(ar["pos"].unique()) * 0.8), replace=False
+    ar["pos"].unique(), size=int(len(ar["pos"].unique()) * 0.95), replace=False
 )
 
 # Split data
 train = ar[ar["pos"].isin(train_pos)].reset_index()
-test = ar[~ar["pos"].isin(train_pos)].reset_index()
+valid = ar[~ar["pos"].isin(train_pos)].reset_index()
 
 # Set up a Training Run
 
@@ -708,10 +709,10 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_s
 config = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
     'batch_size': 4,
-    'epochs': 8,
+    'epochs': 10,
     'criterion': 'MSELoss',
-    'lr_esm': 2e-5,
-    'lr_head': 1e-4,
+    'lr_esm': 5e-5,
+    'lr_head': 1e-3,
     'num_workers': 2,
     'feature_columns': ['classification']  # Add or remove features as needed (experimental feature, column must be present in dataset)
 }
@@ -726,14 +727,14 @@ train.loc[:, "mut_seq"] = train["sequence"]
 train.loc[:, "score"] = train["label"]
 train.loc[:, "classification"] = train["classification"]
 
-test.loc[:, "wt_seq"] = test["wt"]
-test.loc[:, "mut_seq"] = test["sequence"]
-test.loc[:, "score"] = test["label"]
-test.loc[:, "classification"] = test["classification"]
+valid.loc[:, "wt_seq"] = valid["wt"]
+valid.loc[:, "mut_seq"] = valid["sequence"]
+valid.loc[:, "score"] = valid["label"]
+valid.loc[:, "classification"] = valid["classification"]
 
 
 train_dataset = ProteinDatasetESMEffect(train, config['feature_columns'])
-val_dataset = ProteinDatasetESMEffect(test, config['feature_columns'])
+val_dataset = ProteinDatasetESMEffect(valid, config['feature_columns'])
 
 small_train = train.sample(frac=0.1, random_state=random_seed)  # 10% of the training data
 small_train_dataset = ProteinDatasetESMEffect(small_train, config['feature_columns'])
@@ -766,9 +767,10 @@ val_loader = DataLoader(
 experiment.train(train_loader, val_loader)
 
 # Load the best model
-experiment.load_checkpoint("best_model.pt")
+# experiment.load_checkpoint("best_model.pt")
+experiment.load_checkpoint("checkpoint_epoch_10.pt")
 
-predicted_data = experiment.predict(test, config['feature_columns'])
+predicted_data = experiment.predict(valid, config['feature_columns'])
 fig = plot_correlation(
     predicted_data,
     'score',
