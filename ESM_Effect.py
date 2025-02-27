@@ -18,6 +18,7 @@ import esm
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import GroupShuffleSplit
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -371,22 +372,24 @@ class ExperimentManager:
     """Manages training experiments with logging and visualization."""
     def __init__(
         self,
-        model: nn.Module,
         config: Dict,
         experiment_name: str,
         base_dir: str = "./experiments"
     ):
-        self.model = model
         self.config = config
         self.base_dir = Path(base_dir)
         self.experiment_name = f"{experiment_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.device = torch.device(self.config['device'])
-        self.model = self.model.to(self.device)
+        self.reset_model()
         self.criterion = getattr(nn, self.config['criterion'])()
         self.scaler = torch.cuda.amp.GradScaler() # device=self.device)
 
         self.setup_directories()
         self.writer = SummaryWriter(self.log_dir)
+        
+    def reset_model(self):
+        """reset model for multi-fold training."""
+        self.model = ESMEffectFull().to(self.device)
 
     def setup_directories(self):
         """Create experiment directories."""
@@ -404,14 +407,6 @@ class ExperimentManager:
 
     def setup_training_components(self, train_loader: DataLoader):
         """Initialize training components based on config."""
-        # self.optimizer, self.scheduler = setup_optimizer_and_scheduler_esmeffect(
-        #     self.model,
-        #     train_loader,
-        #     self.config['epochs'],
-        #     self.config['batch_size'],
-        #     self.config['lr_esm'],
-        #     self.config['lr_head']
-        # )
         self.optimizer, self.scheduler = setup_optimizer_and_scheduler_esmeffectfull(
             self.model,
             train_loader,
@@ -497,7 +492,7 @@ class ExperimentManager:
 
             if training:
                 self.scaler.scale(loss).backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
 
                 self.scaler.step(self.optimizer)  # Perform optimizer step
                 self.scaler.update()  # Update scaler for mixed precision
@@ -558,12 +553,12 @@ class ExperimentManager:
         print(f"Loaded checkpoint from {checkpoint_path}")
         return checkpoint['config']  # Return loaded config for reference
 
-    def train(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None):
+    def train(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None, fold: int = 1):
         """Full training loop with logging."""
         # Setup optimizer and scheduler here, now that we have the train_loader
         self.setup_training_components(train_loader)
 
-        self.best_val_metric = float('inf')
+        self.best_val_metric = - float('inf')
 
         for self.current_epoch in range(self.config['epochs']):
             epoch_start_time = time.time()
@@ -572,7 +567,7 @@ class ExperimentManager:
             train_loss = self.train_epoch(self.current_epoch, train_loader)
             self.writer.add_scalar('Loss/train', train_loss, self.current_epoch)
 
-            print(f"Epoch {self.current_epoch+1}/{self.config['epochs']}")
+            print(f"Fold {fold} Epoch {self.current_epoch+1}/{self.config['epochs']}")
             print(f"Train Loss: {train_loss:.4f}")
             # Validation
             if val_loader:
@@ -580,24 +575,14 @@ class ExperimentManager:
                 for name, value in metrics.items():
                     self.writer.add_scalar(f'Metrics/{name}', value, self.current_epoch)
 
-                # Save best model according to BME
-                if metrics['val_bme'] < self.best_val_metric:
-                    self.best_val_metric = metrics['val_bme']
-                    self.save_checkpoint(f"best_model.pt")
+                # Save best model according to Spearman R
+                if metrics['val_spearman'] > self.best_val_metric:
+                    self.best_val_metric = metrics['val_spearman']
+                    self.save_checkpoint(f"best_model_fold{fold}.pt")
 
                 # Also save periodic checkpoints
                 if (self.current_epoch + 1) % 5 == 0:  # Save every 5 epochs
-                    self.save_checkpoint(f"checkpoint_epoch_{self.current_epoch+1}.pt")
-
-            if small_train_loader:
-                train_subset_metrics = self.evaluate(small_train_loader, prefix="small_train")
-                for name, value in train_subset_metrics.items():
-                    self.writer.add_scalar(f'Metrics/{name}', value, self.current_epoch)
-                print(f"Small Train Pearson: {train_subset_metrics['small_train_pearson']:.4f}")
-                print(f"Small Train Spearman: {train_subset_metrics['small_train_spearman']:.4f}")
-                print(f"Small Train BME: {train_subset_metrics['small_train_bme']:.4f}")
-                print(f"Small Train ROC: {train_subset_metrics['small_train_auroc']:.4f}")
-
+                    self.save_checkpoint(f"checkpoint_epoch_{self.current_epoch+1}_fold{fold}.pt")
 
             # Log epoch metrics
             epoch_time = time.time() - epoch_start_time
@@ -629,14 +614,14 @@ class ExperimentManager:
         with torch.no_grad():
             for batch in data_loader:
                 batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b for b in batch]
-                preds = self.model(*batch[:-2])  # Exclude labels
+                preds = self.model(*batch[:-2])  # Exclude classifications and target scores
                 all_preds.extend(preds.cpu().numpy())
 
         # Add predictions to the original dataframe
         dataframe['prediction'] = np.squeeze(all_preds)
         return dataframe
 
-def plot_correlation(df, x_col, y_col, title, figsize=(8, 8)):
+def plot_correlation(df, x_col, y_col, title, filename, figsize=(8, 8)):
     """
     Creates a scatter plot with a diagonal reference line and saves the plot.
 
@@ -683,27 +668,9 @@ def plot_correlation(df, x_col, y_col, title, figsize=(8, 8)):
     ax.set_title(f"{title} ({len(df)} test mutations)")
     
     plt.tight_layout()
-    plt.savefig('ESM_experiment_test.jpg')
+    plt.savefig(filename)
     plt.show()
     plt.close(fig)
-
-# Load the DataFrame
-ar = pd.read_csv("data/filtered_dependency.csv")
-ar = ar.loc[ar['Fold']=='Train']
-
-# Position based split
-train_pos = np.random.choice(
-    ar["pos"].unique(), size=int(len(ar["pos"].unique()) * 0.95), replace=False
-)
-
-# Split data
-train = ar[ar["pos"].isin(train_pos)].reset_index()
-valid = ar[~ar["pos"].isin(train_pos)].reset_index()
-
-# Set up a Training Run
-
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_scheduler")
 
 # Configuration
 config = {
@@ -711,69 +678,91 @@ config = {
     'batch_size': 4,
     'epochs': 10,
     'criterion': 'MSELoss',
-    'lr_esm': 5e-5,
+    'lr_esm': 2e-5,
     'lr_head': 1e-3,
     'num_workers': 2,
-    'feature_columns': ['classification']  # Add or remove features as needed (experimental feature, column must be present in dataset)
+    'feature_columns': ['classification']
 }
 
-# Create model and experiment manager
-model = ESMEffectFull() # change setup function in ExperimentManager as well. 
-experiment = ExperimentManager(model, config, "protein_prediction")
+# Load the DataFrame
+ar = pd.read_csv("data/filtered_dependency.csv")
 
-# Prepare data
-train.loc[:, "wt_seq"] = train["wt"]
-train.loc[:, "mut_seq"] = train["sequence"]
-train.loc[:, "score"] = train["label"]
-train.loc[:, "classification"] = train["classification"]
+ar.loc[:, "wt_seq"] = ar["wt"]
+ar.loc[:, "mut_seq"] = ar["sequence"]
+ar.loc[:, "score"] = ar["label"]
 
-valid.loc[:, "wt_seq"] = valid["wt"]
-valid.loc[:, "mut_seq"] = valid["sequence"]
-valid.loc[:, "score"] = valid["label"]
-valid.loc[:, "classification"] = valid["classification"]
+ar_test_internal = ar.loc[ar['Fold']=='Test_internal']
+ar_test_clinvar = ar.loc[ar['Fold']=='Test_ClinVar']
+ar_train = ar.loc[~ar['Fold'].isin(['Test_ClinVar', 'Test_internal'])]
+
+experiment = ExperimentManager(config, "ESM_ar_dependency_5cv")
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_scheduler")
+
+# 5 fold cross validation
+for i in range(5):
+    fold = i + 1
+    
+    experiment.reset_model()
+
+    # Split data
+    train = ar_train.loc[ar['Fold']!=f'Train_{fold}'].copy().reset_index()
+    val   = ar_train.loc[ar['Fold']==f'Train_{fold}'].copy().reset_index()
+
+    train_dataset = ProteinDatasetESMEffect(train, config['feature_columns'])
+    val_dataset   = ProteinDatasetESMEffect(val, config['feature_columns'])
 
 
-train_dataset = ProteinDatasetESMEffect(train, config['feature_columns'])
-val_dataset = ProteinDatasetESMEffect(valid, config['feature_columns'])
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config['batch_size'],
+        num_workers=config['num_workers'],
+        shuffle=True,
+        collate_fn=collate_fn_esmeffect
+    )
 
-small_train = train.sample(frac=0.1, random_state=random_seed)  # 10% of the training data
-small_train_dataset = ProteinDatasetESMEffect(small_train, config['feature_columns'])
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config['batch_size'],
+        num_workers=config['num_workers'],
+        shuffle=False,
+        collate_fn=collate_fn_esmeffect
+    )
 
-small_train_loader = DataLoader(
-    small_train_dataset,
-    batch_size=config['batch_size'],
-    num_workers=config['num_workers'],
-    shuffle=False,
-    collate_fn=collate_fn_esmeffect
-)
+    # Train model
+    experiment.train(train_loader, val_loader, fold)
 
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=config['batch_size'],
-    num_workers=config['num_workers'],
-    shuffle=True,
-    collate_fn=collate_fn_esmeffect
-)
+# Internal test for 5 models
+ar_test_internal_avg = ar_test_internal.copy()
+ar_test_internal_avg['prediction'] = 0
 
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=config['batch_size'],
-    num_workers=config['num_workers'],
-    shuffle=False,
-    collate_fn=collate_fn_esmeffect
-)
+for i in range(5):
+    fold = i + 1
+    
+    # Load the best model
+    experiment.load_checkpoint(f"best_model_fold{fold}.pt")
 
-# Train model
-experiment.train(train_loader, val_loader)
+    predicted_data = experiment.predict(ar_test_internal, config['feature_columns'])
 
-# Load the best model
-# experiment.load_checkpoint("best_model.pt")
-experiment.load_checkpoint("checkpoint_epoch_10.pt")
-
-predicted_data = experiment.predict(valid, config['feature_columns'])
+    fig = plot_correlation(
+        predicted_data,
+        'score',
+        'prediction',
+        f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
+        f'test_internal_fold{fold}.jpg'
+    )
+    
+    ar_test_internal_avg['prediction'] += predicted_data['prediction'] / 5
+    
 fig = plot_correlation(
-    predicted_data,
+    ar_test_internal_avg,
     'score',
     'prediction',
-    "Optimized ESM-Effect on AR Dependency Test set\n(20%, non-overlapping positions)"
+    f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
+    f'test_internal_ensemble.jpg'
 )
+
+# Last edit: No feat, true balanced position based split, lr changed, internal test with ensemble.
+# Todo: test on clinvar
+# Todo: multitask learning for alphamissense scores
