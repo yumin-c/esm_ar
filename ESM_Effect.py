@@ -750,7 +750,7 @@ for i in range(5):
         'score',
         'prediction',
         f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
-        f'test_internal_fold{fold}.jpg'
+        f'{experiment.exp_dir}/test_internal_fold{fold}.jpg'
     )
     
     ar_test_internal_avg['prediction'] += predicted_data['prediction'] / 5
@@ -760,9 +760,61 @@ fig = plot_correlation(
     'score',
     'prediction',
     f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
-    f'test_internal_ensemble.jpg'
+    f'{experiment.exp_dir}/test_internal_ensemble.jpg'
 )
 
-# Last edit: No feat, true balanced position based split, lr changed, internal test with ensemble.
-# Todo: test on clinvar
+# ClinVar test for 5 models
+ar_test_clinvar_avg = ar_test_clinvar.copy()
+ar_test_clinvar_avg['prediction'] = 0
+
+for i in range(5):
+    fold = i + 1
+    
+    # Load the best model
+    experiment.load_checkpoint(f"best_model_fold{fold}.pt")
+
+    predicted_data = experiment.predict(ar_test_clinvar, config['feature_columns'])
+
+    fig = plot_correlation(
+        predicted_data,
+        'score',
+        'prediction',
+        f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
+        f'{experiment.exp_dir}/test_clinvar_fold{fold}.jpg'
+    )
+    
+    ar_test_clinvar_avg['prediction'] += predicted_data['prediction'] / 5
+    
+fig = plot_correlation(
+    ar_test_clinvar_avg,
+    'score',
+    'prediction',
+    f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
+    f'{experiment.exp_dir}/test_clinvar_ensemble.jpg'
+)
+
+# ClinVar ROC analysis
+from sklearn.metrics import roc_curve, roc_auc_score
+clinvar_pred = ar_test_clinvar_avg['prediction']
+clinvar_gt = ar_test_clinvar_avg['clinvar classification']
+
+fpr, tpr, _ = roc_curve(clinvar_gt, clinvar_pred)
+auroc = roc_auc_score(clinvar_gt, clinvar_pred)
+
+# ROC Curve 플롯
+plt.figure(figsize=(6, 6), dpi=200)
+plt.plot(fpr, tpr, label=f'AUC = {auroc:.3f}', color='blue')
+plt.plot([0, 1], [0, 1], linestyle='--', color='gray')  # 대각선 기준선
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve')
+plt.legend(loc='lower right')
+
+# 이미지 저장
+plt.savefig(f'{experiment.exp_dir}/clinvar_roc.jpg', dpi=200, bbox_inches='tight')
+plt.close()
+
+print("ROC curve saved as 'clinvar_roc.jpg'")
+
+# Last edit: No feat, true balanced position based split, lr changed, internal/clinvar test with ensemble
 # Todo: multitask learning for alphamissense scores
