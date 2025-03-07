@@ -17,10 +17,10 @@ from datetime import datetime
 import esm
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, pearsonr
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.model_selection import GroupShuffleSplit
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 random_seed = 216
@@ -138,6 +138,7 @@ class ESMEffectFull(nn.Module):
         self.esm2mut, _ = esm.pretrained.esm2_t12_35M_UR50D()
         self.esm2wt, _ = esm.pretrained.esm2_t12_35M_UR50D()
 
+        # Freeze first 10 layers
         for model in [self.esm2mut, self.esm2wt]:
             for i in range(self.freeze_up_to):
                 for param in model.layers[i].parameters():
@@ -178,7 +179,7 @@ class ESMEffectFull(nn.Module):
                 cached_embeddings_wt.append(embedding)
 
         for i in range(batch_size):
-            seq_id = tokens_mut[i].tolist()
+            seq_id = tokens_mut[i].tolist()  # Convert tensor to a unique key
             if tuple(seq_id) in self.embedding_cache:
                 # Use cached embedding
                 cached_embeddings.append(self.embedding_cache[tuple(seq_id)])
@@ -580,7 +581,7 @@ def plot_correlation(df, x_col, y_col, title, filename, figsize=(8, 8)):
 
 # Configuration
 config = {
-    'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+    'device': 'cuda:1' if torch.cuda.is_available() else 'cpu',
     'batch_size': 32,
     'epochs': 10,
     'criterion': 'MSELoss',
@@ -591,13 +592,13 @@ config = {
 }
 
 # Load the DataFrame
-ar = pd.read_csv("data/filtered_dependency.csv")
+ar = pd.read_csv("data/filtered_enz.csv")
 
 ar_test_internal = ar.loc[ar['Fold']=='Test_internal']
-ar_test_clinvar = ar.loc[ar['Fold']=='Test_ClinVar']
-ar_train = ar.loc[~ar['Fold'].isin(['Test_ClinVar', 'Test_internal'])]
+ar_test_clinvar = ar.loc[ar['Fold']=='Test_external']
+ar_train = ar.loc[~ar['Fold'].isin(['Test_external', 'Test_internal'])]
 
-experiment = ExperimentManager(config, "ESM_ar_dependency_5cv")
+experiment = ExperimentManager(config, "ESM_ar_enz_5cv")
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="torch.optim.lr_scheduler")
@@ -665,7 +666,6 @@ fig = plot_correlation(
     f'{experiment.exp_dir}/test_internal_ensemble.jpg'
 )
 
-# ClinVar test for 5 models
 ar_test_clinvar_avg = ar_test_clinvar.copy()
 ar_test_clinvar_avg['prediction'] = 0
 
@@ -676,45 +676,29 @@ for i in range(5):
     experiment.load_checkpoint(f"best_model_fold{fold}.pt")
 
     predicted_data = experiment.predict(ar_test_clinvar, config['feature_columns'])
-
-    fig = plot_correlation(
-        predicted_data,
-        'label',
-        'prediction',
-        f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
-        f'{experiment.exp_dir}/test_clinvar_fold{fold}.jpg'
-    )
     
     ar_test_clinvar_avg['prediction'] += predicted_data['prediction'] / 5
-    
-fig = plot_correlation(
-    ar_test_clinvar_avg,
-    'label',
-    'prediction',
-    f"Optimized ESM-Effect on Validation set\n(non-overlapping positions)\n{experiment.experiment_name}",
-    f'{experiment.exp_dir}/test_clinvar_ensemble.jpg'
-)
 
-# ClinVar ROC analysis
-from sklearn.metrics import roc_curve, roc_auc_score
-clinvar_pred = ar_test_clinvar_avg['prediction']
-clinvar_gt = ar_test_clinvar_avg['clinvar classification']
+internal_classifications = ar_test_internal['classification']
 
-fpr, tpr, _ = roc_curve(clinvar_gt, clinvar_pred)
-auroc = roc_auc_score(clinvar_gt, clinvar_pred)
+internal_pred = ar_test_internal_avg.loc[internal_classifications != 0, 'prediction']
+internal_gt = internal_classifications[internal_classifications != 0]
+
+fpr, tpr, _ = roc_curve(internal_gt, internal_pred)
+auroc = roc_auc_score(internal_gt, internal_pred)
 
 plt.figure(figsize=(6, 6), dpi=200)
 plt.plot(fpr, tpr, label=f'AUC = {auroc:.3f}', color='blue')
-plt.plot([0, 1], [0, 1], linestyle='--', color='gray')  # 대각선 기준선
+plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
 plt.xlabel('False Positive Rate')
 plt.ylabel('True Positive Rate')
 plt.title('ROC Curve')
 plt.legend(loc='lower right')
 
-plt.savefig(f'{experiment.exp_dir}/clinvar_roc.jpg', dpi=200, bbox_inches='tight')
+plt.savefig(f'{experiment.exp_dir}/internal_roc.jpg', dpi=200, bbox_inches='tight')
 plt.close()
 
-print("ROC curve saved as 'clinvar_roc.jpg'")
+print("ROC curve saved as 'internal_roc.jpg'")
 
 missing = pd.read_csv('data/missing.csv')
 missing_prediction = experiment.predict(missing, config['feature_columns'])
