@@ -1,3 +1,9 @@
+# Original work Copyright (c) 2025 Moritz Gollasch
+# Modified work Copyright (c) 2025 Yumin Cheong
+
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
 import torch
 import pandas as pd
 from torch.utils.data import DataLoader
