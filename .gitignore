@@ -4,5 +4,7 @@ wandb/*
 *.ipynb
 *save.py
 finetuning_esm.py
+ESM_Effect*.py
+preprocessing*.py
 *.jpg
 *sweep*
