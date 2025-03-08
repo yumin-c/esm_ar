@@ -1,4 +1,4 @@
-# Original work Copyright (c) 2025 Moritz Gollasch
+# Original work Copyright (c) 2025 Moritz Glaser
 # Modified work Copyright (c) 2025 Yumin Cheong
 
 # This source code is licensed under the MIT license found in the
