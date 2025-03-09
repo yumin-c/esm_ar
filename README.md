@@ -12,6 +12,6 @@ Simplified scheme of ESM-Effect full architecture
 
 This project is based on code from the [ESM-Effect](https://github.com/moritzgls/ESM-Effect) repository.
 
-Original author: Moritz Gollasch
+Original author: Moritz Glaser
 
 License: MIT
