@@ -5,7 +5,8 @@ We fine-tuned ESM-2 models using the ESM-Effect method to predict the effects of
 * Train script
 * Preprocessed data and dataset folds used in the paper
 
-Simplified scheme of ESM-Effect full architecture
+### Simplified scheme of ESM-Effect full architecture
+
 ![ ](https://raw.githubusercontent.com/yumin-c/esm_ar/refs/heads/main/data/architecture.png)
 
 ## Credits
