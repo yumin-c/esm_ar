@@ -9,7 +9,6 @@ import pandas as pd
 from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, roc_auc_score
 
 from utils import ProteinDatasetESMEffect, ExperimentManager
