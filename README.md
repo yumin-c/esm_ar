@@ -7,7 +7,7 @@ We fine-tuned ESM-2 models using the ESM-Effect method to predict the effects of
 
 ### Simplified scheme of ESM-Effect full architecture
 
-![ ](https://raw.githubusercontent.com/yumin-c/esm_ar/refs/heads/main/data/architecture.png)
+![ ](https://github.com/yumin-c/esm_ar/blob/main/data/architecture.png)
 
 ## Credits
 
